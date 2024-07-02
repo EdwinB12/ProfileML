@@ -13,7 +13,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.cuda.amp import GradScaler, autocast
 
-
 class UNet(nn.Module):
     def __init__(self, in_channels, out_channels, multiplier=1):
         super(UNet, self).__init__()
@@ -80,6 +79,16 @@ IMAGE_PIPELINE = transforms.Compose([
     transforms.Resize((224, 224), antialias=True),
     ])
 
+def ddp_setup(rank, world_size):
+    """
+    Args:
+        rank: Unique identifier of each process
+        world_size: Total number of processes
+    """
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
 
 def evaluate(trace_dir):
 
@@ -111,66 +120,24 @@ def add_rank_key_to_log(log_path):
     with open(log_path, 'w') as f:
         json.dump(log, f)
 
-def train(model, num_epochs, train_loader, criterion, optimizer, profile_on_list, device, profiler, mixed_precision):
+def cleanup():
+    destroy_process_group()
 
-    # Iterate over Epochs
-    for epoch in range(num_epochs):
-        now = time.time()
+def train(rank, world_size):
+    ddp_setup(rank, world_size)
 
-        profile_on = profile_on_list[epoch]
-
-        running_loss = 0.0
-
-        print(f"Epoch: {epoch}")
-
-        model.train()
-
-        if profile_on:
-            profiler.start()
-
-        # Iterate over the batches
-        for inputs, masks in train_loader:
-
-            optimizer.zero_grad()
-            inputs = inputs.to(device)
-            masks = masks.to(device)
-
-            if mixed_precision:
-                with autocast():
-
-                    outputs = model(inputs)
-                    loss = criterion(outputs, masks)
-            else:
-                outputs = model(inputs)
-                loss = criterion(outputs, masks)
-
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
-
-            if profile_on:
-                profiler.step()
-
-        if profile_on:
-            profiler.stop()
-
-        time_taken = time.time() - now
-        print('Epoch [{}/{}]: {:2f}'.format(epoch+1, num_epochs, time_taken))
-
-    return time_taken
-
-if __name__ == "__main__":
 
     PARAMS = {
 
-        'LOG_NAME' : "logs/Test6",
+        'LOG_NAME' : "logs/Test5",
         'LR' : 0.001,
         'NUM_EPOCHS' : 2,
-        'BATCH_SIZE' : 256,
+        'BATCH_SIZE' : 512,
         'SHUFFLE' : True,
-        'NUM_WORKERS' : 0,
+        'NUM_WORKERS' : 4,
         'MIXED_PRECISION': True,
     }
+
 
     my_schedule = schedule(
             skip_first=5,
@@ -187,28 +154,72 @@ if __name__ == "__main__":
                 with_stack=True
             )
 
-    device = 'cuda'
-
-
-    train_dataset = SaltDataset(root_dir='competition_data', mode='train', transform=IMAGE_PIPELINE)
-    train_loader = DataLoader(train_dataset, batch_size=PARAMS['BATCH_SIZE'], shuffle=PARAMS['SHUFFLE'], num_workers=PARAMS['NUM_WORKERS'])
-
+    # Create model and move it to the appropriate device
     model = UNet(in_channels=3, out_channels=1)
-    model.to(device)
+    model.to(rank)
+    ddp_model = DDP(model, device_ids=[rank])
 
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=PARAMS['LR'])
+    # Define loss function and optimizer
+    criterion = nn.CrossEntropyLoss().to(rank)
+    optimizer = optim.SGD(ddp_model.parameters(), lr=0.001)
 
-    time_taken = train(model, PARAMS['NUM_EPOCHS'], train_loader, criterion, optimizer,
-                            profile_on_list=[True, False], device=device, profiler=profiler,
-                            mixed_precision=PARAMS['MIXED_PRECISION'])
+    # Create data loader and sampler
+    train_dataset = SaltDataset(root_dir='competition_data', mode='train', transform=IMAGE_PIPELINE)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=PARAMS['SHUFFLE'],)
+    train_loader = DataLoader(train_dataset, batch_size=PARAMS['BATCH_SIZE'], num_workers=PARAMS['NUM_WORKERS'],
+                              sampler=train_sampler)
+
+    profile_on = True
+    num_epochs = 2
+
+    # Training loop
+    for epoch in range(num_epochs): # Loop over the dataset multiple times
+        now = time.time()
+        ddp_model.train()
+        train_sampler.set_epoch(epoch)
+
+        # Iterate over the batches
+        for inputs, masks in train_loader:
+
+            optimizer.zero_grad()
+            inputs = inputs.to(rank)
+            masks = masks.to(rank)
+
+            with autocast():
+                outputs = ddp_model(inputs)
+                loss = criterion(outputs, masks)
+
+            loss.backward()
+            optimizer.step()
+            #running_loss += loss.item()
+
+            if profile_on:
+                profiler.step()
+
+        if profile_on:
+            profiler.stop()
+
+        time_taken = time.time() - now
+        print('Epoch [{}/{}]: {:2f}'.format(epoch+1, num_epochs, time_taken))
+
+    cleanup()
 
     filename = os.listdir(PARAMS['LOG_NAME'])[0]
-    add_rank_key_to_log(os.path.join(PARAMS['LOG_NAME'], filename))
+    #add_rank_key_to_log(os.path.join(PARAMS['LOG_NAME'], filename))
 
     PARAMS['TIME_TAKEN'] = time_taken
 
     # Save Params dict to log directory
     with open(os.path.join(PARAMS['LOG_NAME'], 'params.json'), 'w') as f:
         json.dump(PARAMS, f)
+
+def main():
+
+    world_size = torch.cuda.device_count()
+    torch.multiprocessing.spawn(train, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+
+    main()
+
 
