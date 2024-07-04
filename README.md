@@ -6,11 +6,17 @@ Links to the slides can be found [here](https://docs.google.com/presentation/d/1
 
 ## Installation
 
-I recommend using a virtual environment to install the dependencies. Requirements can be installed via pip:
+To replicate the exact environment I used, then follow these instructions:
+
+1. Install Conda and create a new environment:
+    - `conda create -n profileml_env python=3.10`
+    - `conda activate profileml_env`
+2. `conda install pytorch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 pytorch-cuda=11.8 -c pytorch -c nvidia`
+3. `pip install tensorboard==2.17.0 torch-tb-profiler==0.4.3`
+
+Alternatively, simple installing the latest versions of the packages should work fine.
 
 ```pip install -r requirements.txt```
-
-Note: I've frozen the  versions of the packages to ensure reproducibility. There is no reason to my knowledge that the code won't work with newer versions of the packages.
 
 ## Data
 
