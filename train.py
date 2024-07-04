@@ -13,7 +13,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.cuda.amp import GradScaler, autocast
 
-
 class UNet(nn.Module):
     def __init__(self, in_channels, out_channels, multiplier=1):
         super(UNet, self).__init__()
@@ -79,20 +78,6 @@ IMAGE_PIPELINE = transforms.Compose([
     transforms.RandomRotation(degrees=45),
     transforms.Resize((224, 224), antialias=True),
     ])
-
-
-def evaluate(trace_dir):
-
-    analyzer = TraceAnalysis(trace_dir=trace_dir)
-
-    # Traces with counters
-    analyzer.generate_trace_with_counters()
-
-    # Temporal Breakdown
-    time_spent_df = analyzer.get_temporal_breakdown()
-
-    # Idle Time
-    idle_time_df = analyzer.get_idle_time_breakdown()
 
 def add_rank_key_to_log(log_path):
 
@@ -163,13 +148,13 @@ if __name__ == "__main__":
 
     PARAMS = {
 
-        'LOG_NAME' : "logs/Test6",
+        'LOG_NAME' : "logs/Test1",
         'LR' : 0.001,
         'NUM_EPOCHS' : 2,
         'BATCH_SIZE' : 256,
         'SHUFFLE' : True,
         'NUM_WORKERS' : 0,
-        'MIXED_PRECISION': True,
+        'MIXED_PRECISION': False,
     }
 
     my_schedule = schedule(
@@ -189,8 +174,8 @@ if __name__ == "__main__":
 
     device = 'cuda'
 
-
     train_dataset = SaltDataset(root_dir='competition_data', mode='train', transform=IMAGE_PIPELINE)
+    # Test 1
     train_loader = DataLoader(train_dataset, batch_size=PARAMS['BATCH_SIZE'], shuffle=PARAMS['SHUFFLE'], num_workers=PARAMS['NUM_WORKERS'])
 
     model = UNet(in_channels=3, out_channels=1)

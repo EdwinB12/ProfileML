@@ -11,65 +11,9 @@ from PIL import Image
 from torchvision import transforms
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import autocast
 
-class UNet(nn.Module):
-    def __init__(self, in_channels, out_channels, multiplier=1):
-        super(UNet, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, 64 * multiplier, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64* multiplier, 64* multiplier, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2)
-        )
-        self.middle = nn.Sequential(
-            nn.Conv2d(64* multiplier, 128* multiplier, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128* multiplier, 128* multiplier, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2)
-        )
-        self.decoder = nn.Sequential(
-            nn.Conv2d(128* multiplier, 64* multiplier, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64* multiplier, 64* multiplier, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(64 * multiplier, out_channels, kernel_size=2, stride=2),
-            nn.ConvTranspose2d(out_channels, out_channels, kernel_size=2, stride=2)
-        )
-
-    def forward(self, x):
-        x1 = self.encoder(x)
-        x2 = self.middle(x1)
-        #print(x2.shape)
-        x3 = self.decoder(x2)
-        #print(x3.shape)
-        return x3
-
-class SaltDataset(Dataset):
-    def __init__(self, root_dir, mode='train', transform=None):
-        self.root_dir = os.path.join(root_dir, mode)
-        self.mode = mode
-        self.transform = transform
-        self.image_ids = os.listdir(os.path.join(self.root_dir, 'images'))
-
-    def __len__(self):
-        return len(self.image_ids)
-
-    def __getitem__(self, idx):
-        image_id = self.image_ids[idx]
-        image_path = os.path.join(self.root_dir, 'images', image_id)
-        mask_path = os.path.join(self.root_dir, 'masks', image_id)
-
-        image = Image.open(image_path).convert('RGB')
-        mask = Image.open(mask_path).convert('L')
-
-        if self.transform is not None:
-            image = self.transform(image)
-            mask = self.transform(mask)
-
-        return image, mask
+from train import UNet, SaltDataset
 
 IMAGE_PIPELINE = transforms.Compose([
     transforms.ToTensor(),
@@ -90,36 +34,6 @@ def ddp_setup(rank, world_size):
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
-def evaluate(trace_dir):
-
-    analyzer = TraceAnalysis(trace_dir=trace_dir)
-
-    # Traces with counters
-    analyzer.generate_trace_with_counters()
-
-    # Temporal Breakdown
-    time_spent_df = analyzer.get_temporal_breakdown()
-
-    # Idle Time
-    idle_time_df = analyzer.get_idle_time_breakdown()
-
-def add_rank_key_to_log(log_path):
-
-    # Load the json file, check if "distributedInfo" key exists,
-    # if not, then add it with the value "distributedInfo": {"rank": 0}
-
-    # Load the json file
-    with open(log_path, 'r') as f:
-        log = json.load(f)
-
-    # Check if "distributedInfo" key exists
-    if "distributedInfo" not in log:
-        log["distributedInfo"] = {"rank": 0}
-
-    # Write the updated log back to the file
-    with open(log_path, 'w') as f:
-        json.dump(log, f)
-
 def cleanup():
     destroy_process_group()
 
@@ -129,10 +43,10 @@ def train(rank, world_size):
 
     PARAMS = {
 
-        'LOG_NAME' : "logs/Test5",
+        'LOG_NAME' : "logs/Test4",
         'LR' : 0.001,
         'NUM_EPOCHS' : 2,
-        'BATCH_SIZE' : 512,
+        'BATCH_SIZE' : 256,
         'SHUFFLE' : True,
         'NUM_WORKERS' : 4,
         'MIXED_PRECISION': True,
